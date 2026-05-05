@@ -7,3 +7,4 @@ dist/
 !scripts/*.ts
 scripts/.env
 !scripts/.env.example
+.gstack/
