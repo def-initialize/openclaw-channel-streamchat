@@ -10,6 +10,7 @@ export const StreamChatConfigSchema: z.ZodTypeAny = z.object({
   ackReaction: z.string().optional().default("eyes"),
   doneReaction: z.string().optional().default("white_check_mark"),
   streamingThrottle: z.number().int().min(1).optional().default(15),
+  mockResponse: z.string().optional(),
   accounts: z
     .record(z.string(), z.lazy(() => StreamChatConfigSchema))
     .optional(),

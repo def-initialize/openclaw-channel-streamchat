@@ -121,6 +121,15 @@ async function handleStreamChatMessage(params: HandleMessageParams): Promise<voi
   const quotedMessageId = message.quoted_message_id ?? null;
   const quotedMessage = message.quoted_message ?? null;
 
+  // Config-driven mock: reply with a static string and skip agent dispatch
+  if (account.mockResponse) {
+    const responseChannel = await chatRuntime.getOrQueryChannel(channelType, channelId);
+    const msgPayload: Record<string, unknown> = { text: account.mockResponse, ai_generated: true };
+    if (threadParentId) msgPayload.parent_id = threadParentId;
+    await responseChannel.sendMessage(msgPayload as Parameters<typeof responseChannel.sendMessage>[0]);
+    return;
+  }
+
   // Resolve agent route
   // Use peer kind "channel" so the framework builds per-channel session keys:
   //   agent:<agentId>:streamchat:channel:<channelId>

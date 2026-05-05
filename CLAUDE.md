@@ -17,6 +17,10 @@ npx tsx scripts/test-thread.ts
 
 # Restart the gateway after code changes
 openclaw gateway restart
+
+# Enable mock mode (replies with a static string, skips agent dispatch)
+# Edit channels.streamchat.mockResponse in ~/.openclaw/openclaw.json — OpenClaw hot-reloads on save.
+# Remove the field to restore normal agent dispatch.
 ```
 
 There is no build step for the plugin itself. OpenClaw loads it directly from TypeScript source via `tsx`. The `scripts/` directory is excluded from `tsconfig.json`; scripts are run standalone with `npx tsx`.

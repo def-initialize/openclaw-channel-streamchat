@@ -14,6 +14,7 @@ export interface StreamChatChannelConfig {
   ackReaction?: string;
   doneReaction?: string;
   streamingThrottle?: number;
+  mockResponse?: string;
   accounts?: Record<string, StreamChatChannelConfig>;
 }
 
@@ -29,6 +30,7 @@ export interface ResolvedAccount {
   ackReaction: string;
   doneReaction: string;
   streamingThrottle: number;
+  mockResponse?: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -105,5 +107,6 @@ export function resolveStreamChatAccount(
     ackReaction: base.ackReaction ?? "eyes",
     doneReaction: base.doneReaction ?? "white_check_mark",
     streamingThrottle: base.streamingThrottle ?? 15,
+    mockResponse: base.mockResponse,
   };
 }

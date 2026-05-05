@@ -56,7 +56,8 @@ If you used Option B, add the channel config and plugin entry to `~/.openclaw/op
       // Optional:
       "ackReaction": "eyes",              // reaction added when message is received (default: "eyes")
       "doneReaction": "white_check_mark", // reaction swapped in when response is done (default: "white_check_mark")
-      "streamingThrottle": 15             // partial-update every Nth chunk (default: 15)
+      "streamingThrottle": 15,            // partial-update every Nth chunk (default: 15)
+      "mockResponse": "hello"             // if set, reply with this string and skip agent dispatch (for testing)
     }
   },
   "plugins": {
@@ -147,6 +148,21 @@ Sends a parent message, waits for the bot's response, then sends a thread reply 
 ```bash
 npx tsx scripts/test-thread.ts
 ```
+
+## Mock mode
+
+Set `mockResponse` in `openclaw.json` to make the plugin reply with a static string instead of dispatching to the agent. Useful when the OpenClaw agent pipeline is unavailable or broken and you need to verify the channel plumbing end-to-end.
+
+```jsonc
+"channels": {
+  "streamchat": {
+    // ...
+    "mockResponse": "hello"
+  }
+}
+```
+
+OpenClaw hot-reloads `channels.streamchat.*` config on save — no restart needed. Remove the field to restore normal agent dispatch.
 
 ## How it works
 
