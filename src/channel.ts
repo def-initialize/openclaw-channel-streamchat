@@ -467,7 +467,7 @@ export const streamchatPlugin: StreamChatChannelPlugin = {
   gateway: {
     startAccount: async (
       ctx: ChannelGatewayContext<ResolvedAccount>,
-    ): Promise<{ stop: () => void }> => {
+    ): Promise<void> => {
       const { cfg, accountId, account, log, abortSignal } = ctx;
 
       if (!account.configured) {
@@ -540,41 +540,42 @@ export const streamchatPlugin: StreamChatChannelPlugin = {
       client.on("message.new", handleMessage);
       client.on("ai_indicator.stop" as "user.watching.start", handleAiStop);
 
-      // Handle abort signal / explicit stop — idempotent via `stopped` guard
-      let stopped = false;
-      const handleAbort = () => {
-        if (stopped) return;
-        stopped = true;
-        client.off("message.new", handleMessage);
-        client.off("ai_indicator.stop" as "user.watching.start", handleAiStop);
-        activeGatewayCleanup.delete(accountId);
-        chatRuntime.stop().catch((err) => {
-          log?.error?.(
-            `[StreamChat] Disconnect error: ${String(err)}`,
-          );
-        });
-        ctx.setStatus({
-          ...ctx.getStatus(),
-          running: false,
-          lastStopAt: Date.now(),
-        });
-      };
-
-      activeGatewayCleanup.set(accountId, handleAbort);
-
-      if (abortSignal) {
-        abortSignal.addEventListener("abort", handleAbort, { once: true });
-      }
-
       log?.info?.(
         `[StreamChat] Gateway started for account "${accountId}"`,
       );
 
-      return {
-        stop: () => {
-          handleAbort();
-        },
-      };
+      // Stay pending until the abort signal fires or the caller stops the account.
+      // Resolving early would cause the framework to interpret it as an unexpected
+      // exit and schedule an auto-restart, accumulating live WebSocket connections.
+      await new Promise<void>((resolve) => {
+        // Idempotent via `stopped` guard — safe to call from both abort signal and
+        // activeGatewayCleanup (which may fire on the next startAccount call).
+        let stopped = false;
+        const handleAbort = () => {
+          if (stopped) return;
+          stopped = true;
+          client.off("message.new", handleMessage);
+          client.off("ai_indicator.stop" as "user.watching.start", handleAiStop);
+          activeGatewayCleanup.delete(accountId);
+          chatRuntime.stop().catch((err) => {
+            log?.error?.(
+              `[StreamChat] Disconnect error: ${String(err)}`,
+            );
+          });
+          ctx.setStatus({
+            ...ctx.getStatus(),
+            running: false,
+            lastStopAt: Date.now(),
+          });
+          resolve();
+        };
+
+        activeGatewayCleanup.set(accountId, handleAbort);
+
+        if (abortSignal) {
+          abortSignal.addEventListener("abort", handleAbort, { once: true });
+        }
+      });
     },
   },
 
