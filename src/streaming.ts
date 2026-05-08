@@ -233,6 +233,17 @@ export class StreamingHandler {
   }
 
   /**
+   * Replaces the accumulated text for authoritative final payloads that do
+   * not extend the streamed partial text.
+   */
+  replaceText(runId: string, text: string): void {
+    const stream = this.streams.get(runId);
+    if (!stream || stream.finalized) return;
+
+    stream.accumulatedText = text;
+  }
+
+  /**
    * Called when the agent invokes a tool. Updates the indicator to
    * EXTERNAL_SOURCES so the UI shows tool activity.
    */

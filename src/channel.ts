@@ -146,7 +146,7 @@ interface HandleMessageParams {
   log?: ChannelLogSink;
 }
 
-async function handleStreamChatMessage(params: HandleMessageParams): Promise<void> {
+export async function handleStreamChatMessage(params: HandleMessageParams): Promise<void> {
   const {
     cfg,
     accountId,
@@ -355,10 +355,54 @@ async function handleStreamChatMessage(params: HandleMessageParams): Promise<voi
 
   let errorDelivered = false;
 
-  // Track cumulative text from onPartialReply to compute per-token deltas.
-  // onPartialReply gives full accumulated text so far ("2", "2 +", "2 + 2 = 4"),
-  // while onTextChunk expects a delta and appends it. We slice to get the new portion.
-  let lastPartialText = "";
+  // Track the text already pushed into StreamingHandler so cumulative token
+  // snapshots and final/block dispatcher payloads do not duplicate each other.
+  let streamedText = "";
+  let sawPartialText = false;
+
+  const appendTextDelta = (delta: string) => {
+    if (!delta) return;
+    streamedText += delta;
+    void streamingHandler.onTextChunk(runId, delta, account.streamingThrottle);
+  };
+
+  const appendPartialText = (text: string) => {
+    if (!text) return;
+
+    if (text.startsWith(streamedText)) {
+      appendTextDelta(text.slice(streamedText.length));
+      return;
+    }
+
+    appendTextDelta(text);
+  };
+
+  const appendFinalText = (full: string) => {
+    if (!full || full === streamedText) return;
+
+    if (!streamedText || full.startsWith(streamedText)) {
+      appendTextDelta(full.slice(streamedText.length));
+      return;
+    }
+
+    log?.warn?.(
+      "[StreamChat] Final text diverged from accumulated stream text; replacing streamed text",
+    );
+    streamedText = full;
+    streamingHandler.replaceText(runId, full);
+  };
+
+  const replyOptions = {
+    sourceReplyDeliveryMode: "automatic",
+    onPartialReply: (payload: { text?: string }) => {
+      if (payload.text) sawPartialText = true;
+      appendPartialText(payload.text ?? "");
+    },
+  } as unknown as NonNullable<
+    Parameters<
+      typeof rt.channel.reply.dispatchReplyWithBufferedBlockDispatcher
+    >[0]["replyOptions"]
+  >;
 
   // Dispatch reply via the buffered block dispatcher.
   // onPartialReply fires for every streaming token (preview streaming).
@@ -366,16 +410,7 @@ async function handleStreamChatMessage(params: HandleMessageParams): Promise<voi
   await rt.channel.reply.dispatchReplyWithBufferedBlockDispatcher({
     ctx,
     cfg,
-    replyOptions: {
-      onPartialReply: (payload: { text?: string }) => {
-        const full = payload.text ?? "";
-        const delta = full.slice(lastPartialText.length);
-        lastPartialText = full;
-        if (delta) {
-          void streamingHandler.onTextChunk(runId, delta, account.streamingThrottle);
-        }
-      },
-    },
+    replyOptions,
     dispatcherOptions: {
       responsePrefix: "",
       deliver: async (
@@ -399,7 +434,13 @@ async function handleStreamChatMessage(params: HandleMessageParams): Promise<voi
             return;
           }
 
-          // Text blocks are handled token-by-token via onPartialReply above.
+          if (payload.text) {
+            if (info.kind === "final") {
+              appendFinalText(payload.text);
+            } else if (!sawPartialText) {
+              appendTextDelta(payload.text);
+            }
+          }
         } catch (err) {
           log?.error?.(
             `[StreamChat] Deliver failed: ${String(err)}`,
