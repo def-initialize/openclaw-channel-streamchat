@@ -179,13 +179,13 @@ export class StreamingHandler {
   /**
    * Called for each text chunk from the agent. Accumulates text and
    * periodically flushes via partialUpdateMessage with a throttle pattern:
-   * - Early bursts: update on odd chunks < 8 (chunks 1, 3, 5, 7)
-   * - Then every Nth chunk (configurable via streamingThrottle, default 15)
+   * - Early burst: update on chunks 1 and 5
+   * - Then every Nth chunk (configurable via streamingThrottle, default 35)
    */
   async onTextChunk(
     runId: string,
     chunk: string,
-    streamingThrottle: number = 15,
+    streamingThrottle: number = 35,
   ): Promise<void> {
     const stream = this.streams.get(runId);
     if (!stream || stream.finalized) return;
@@ -210,9 +210,9 @@ export class StreamingHandler {
       );
     }
 
-    // Throttle: early bursts (odd chunks < 8) then every Nth
+    // Throttle: early burst (chunks 1 and 5) then every Nth
     const shouldUpdate =
-      (n < 8 && n % 2 !== 0) || n % streamingThrottle === 0;
+      n === 1 || n === 5 || n % streamingThrottle === 0;
 
     if (shouldUpdate) {
       const text = stream.accumulatedText;

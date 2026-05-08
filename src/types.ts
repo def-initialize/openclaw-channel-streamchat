@@ -106,7 +106,7 @@ export function resolveStreamChatAccount(
     dmPolicy: base.dmPolicy ?? "open",
     ackReaction: base.ackReaction ?? "eyes",
     doneReaction: base.doneReaction ?? "white_check_mark",
-    streamingThrottle: base.streamingThrottle ?? 15,
+    streamingThrottle: base.streamingThrottle ?? 35,
     mockResponse: base.mockResponse,
   };
 }

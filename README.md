@@ -56,7 +56,7 @@ If you used Option B, add the channel config and plugin entry to `~/.openclaw/op
       // Optional:
       "ackReaction": "eyes",              // reaction added when message is received (default: "eyes")
       "doneReaction": "white_check_mark", // reaction swapped in when response is done (default: "white_check_mark")
-      "streamingThrottle": 15,            // partial-update every Nth chunk (default: 15)
+      "streamingThrottle": 35,            // partial-update every Nth chunk after chunks 1 and 5 (default: 35)
       "mockResponse": "hello"             // if set, reply with this string and skip agent dispatch (for testing)
     }
   },
