@@ -212,6 +212,35 @@ export class StreamingHandler {
     // Wait for any in-flight partial updates
     await stream.lastUpdatePromise.catch(() => {});
 
+    const finalText = stream.accumulatedText.trim();
+    if (!finalText) {
+      try {
+        await client.deleteMessage(stream.messageId, { hardDelete: true });
+      } catch (err) {
+        log?.warn?.(
+          `[StreamChat][streaming] Empty placeholder delete failed: ${String(err)}`,
+        );
+        try {
+          await client.partialUpdateMessage(stream.messageId, {
+            set: { text: "", generating: false },
+          });
+        } catch (fallbackErr) {
+          log?.error?.(
+            `[StreamChat][streaming] Empty placeholder fallback update failed: ${String(fallbackErr)}`,
+          );
+        }
+      }
+
+      await safeSendEvent(
+        stream.channel,
+        { type: "ai_indicator.clear", message_id: stream.messageId },
+        log,
+      );
+
+      this.streams.delete(runId);
+      return;
+    }
+
     // Final update with complete text
     try {
       await client.partialUpdateMessage(stream.messageId, {

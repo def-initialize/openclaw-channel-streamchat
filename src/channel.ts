@@ -33,6 +33,65 @@ const seenThreads = new Set<string>();
 const activeGatewayCleanup = new Map<string, () => void>();
 
 // ---------------------------------------------------------------------------
+// Stream Chat target parsing
+// ---------------------------------------------------------------------------
+
+interface ParsedStreamChatTarget {
+  channelType: string;
+  channelId: string;
+  cid: string;
+}
+
+const rejectedStreamChatTargetPrefixes = new Set([
+  "streamchat",
+  "channel",
+  "group",
+  "conversation",
+  "room",
+  "dm",
+  "user",
+  "thread",
+]);
+
+function getEventChannelCid(event: Event): string | undefined {
+  const channel = event.channel as { cid?: unknown } | undefined;
+  const cid = typeof channel?.cid === "string" ? channel.cid.trim() : "";
+  return cid || undefined;
+}
+
+function buildStreamChatCid(channelType: string, channelId: string): string {
+  return `${channelType}:${channelId}`;
+}
+
+function parseStreamChatTarget(
+  raw?: string | null,
+): ParsedStreamChatTarget | null {
+  const cid = raw?.trim();
+  if (!cid) return null;
+
+  const separator = cid.indexOf(":");
+  if (separator <= 0 || separator === cid.length - 1) return null;
+  if (separator !== cid.lastIndexOf(":")) return null;
+
+  const channelType = cid.slice(0, separator).trim();
+  const channelId = cid.slice(separator + 1).trim();
+  if (!channelType || !channelId) return null;
+  if (rejectedStreamChatTargetPrefixes.has(channelType.toLowerCase())) {
+    return null;
+  }
+
+  return {
+    channelType,
+    channelId,
+    cid: buildStreamChatCid(channelType, channelId),
+  };
+}
+
+function looksLikeStreamChatTarget(raw: string): boolean {
+  return parseStreamChatTarget(raw) !== null;
+}
+
+// ---------------------------------------------------------------------------
 // Reactions helper
 // ---------------------------------------------------------------------------
 
@@ -110,8 +169,14 @@ async function handleStreamChatMessage(params: HandleMessageParams): Promise<voi
   const text = message.text?.trim();
   if (!text) return;
 
-  const channelType = event.channel_type ?? "messaging";
-  const channelId = event.channel_id ?? "";
+  const eventTarget = parseStreamChatTarget(getEventChannelCid(event));
+  const channelType = event.channel_type ?? eventTarget?.channelType ?? "messaging";
+  const channelId = event.channel_id ?? eventTarget?.channelId ?? "";
+  if (!channelId) {
+    log?.warn?.("[StreamChat] Dropping inbound message without channel id");
+    return;
+  }
+  const streamTarget = eventTarget?.cid ?? buildStreamChatCid(channelType, channelId);
   const messageId = message.id;
   const senderId = event.user?.id ?? "unknown";
   const senderName = event.user?.name || senderId;
@@ -132,13 +197,13 @@ async function handleStreamChatMessage(params: HandleMessageParams): Promise<voi
 
   // Resolve agent route
   // Use peer kind "channel" so the framework builds per-channel session keys:
-  //   agent:<agentId>:streamchat:channel:<channelId>
+  //   agent:<agentId>:streamchat:channel:<channelType>:<channelId>
   // This ensures each Stream Chat channel gets its own session (per action plan).
   const route = rt.channel.routing.resolveAgentRoute({
     cfg,
     channel: "streamchat",
     accountId,
-    peer: { kind: "channel", id: channelId },
+    peer: { kind: "channel", id: streamTarget },
   });
 
   const storePath = rt.channel.session.resolveStorePath(
@@ -205,7 +270,7 @@ async function handleStreamChatMessage(params: HandleMessageParams): Promise<voi
   });
 
   // Finalize inbound context
-  const to = channelId;
+  const to = streamTarget;
   const fromLabel = `${senderName} (${senderId})`;
 
   const ctx = rt.channel.reply.finalizeInboundContext({
@@ -404,6 +469,35 @@ export const streamchatPlugin: StreamChatChannelPlugin = {
     blockStreaming: false,
   },
 
+  messaging: {
+    normalizeTarget: (target: string) => target.trim() || undefined,
+    inferTargetChatType: ({ to }: { to: string }) =>
+      looksLikeStreamChatTarget(to) ? "channel" : undefined,
+    targetResolver: {
+      hint: "Use a Stream Chat CID, e.g. messaging:ai-test-channel",
+      looksLikeId: looksLikeStreamChatTarget,
+      resolveTarget: async ({
+        input,
+        normalized,
+      }: {
+        input: string;
+        normalized: string;
+      }) => {
+        const target =
+          parseStreamChatTarget(normalized) ?? parseStreamChatTarget(input);
+        if (!target) return null;
+        return {
+          to: target.cid,
+          kind: "channel" as const,
+          display: target.cid,
+          source: "normalized" as const,
+        };
+      },
+    },
+    formatTargetDisplay: ({ target, display }: { target: string; display?: string }) =>
+      display ?? `#${target}`,
+  } as unknown as NonNullable<StreamChatChannelPlugin["messaging"]>,
+
   reload: { configPrefixes: ["channels.streamchat"] },
 
   configSchema: buildChannelConfigSchema(StreamChatConfigSchema),
@@ -437,6 +531,19 @@ export const streamchatPlugin: StreamChatChannelPlugin = {
   outbound: {
     deliveryMode: "direct",
 
+    resolveTarget: ({ to }) => {
+      const target = parseStreamChatTarget(to);
+      if (!target) {
+        return {
+          ok: false,
+          error: new Error(
+            "Stream Chat target must be a CID like messaging:ai-test-channel.",
+          ),
+        };
+      }
+      return { ok: true, to: target.cid };
+    },
+
     sendText: async (ctx: ChannelOutboundContext) => {
       const account = resolveStreamChatAccount(ctx.cfg, ctx.accountId);
       if (!account.configured) {
@@ -449,9 +556,15 @@ export const streamchatPlugin: StreamChatChannelPlugin = {
       const tempRuntime = new StreamChatClientRuntime(account);
       try {
         await tempRuntime.start();
+        const target = parseStreamChatTarget(ctx.to);
+        if (!target) {
+          throw new Error(
+            "Stream Chat target must be a CID like messaging:ai-test-channel.",
+          );
+        }
         const channel = await tempRuntime.getOrQueryChannel(
-          "messaging",
-          ctx.to,
+          target.channelType,
+          target.channelId,
         );
 
         const msgPayload: Record<string, unknown> = { text: ctx.text };
