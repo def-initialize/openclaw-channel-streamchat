@@ -97,7 +97,7 @@ How each signal from the OpenClaw pipeline translates into Stream Chat API calls
 | Pre-dispatch (before agent runs) | `channel.sendMessage({ text: "", ai_generated: true })` | Creates the bot's placeholder message |
 | Pre-dispatch (before agent runs) | `channel.sendEvent({ type: "ai_indicator.update", ai_state: "AI_STATE_THINKING" })` | Sent immediately with placeholder |
 | `onPartialReply` first token | `channel.sendEvent({ type: "ai_indicator.update", ai_state: "AI_STATE_GENERATING" })` | Transitions from THINKING on the very first token |
-| `onPartialReply` per token — throttled | `client.partialUpdateMessage(msgId, { set: { text, generating: true } })` | Delta-computed from cumulative text. Odd chunks 1,3,5,7; then every N (default 15). Chained via `lastUpdatePromise` to avoid out-of-order updates |
+| `onPartialReply` per token — throttled | `client.partialUpdateMessage(msgId, { set: { text, generating: true } })` | Delta-computed from cumulative text. Chunks 1 and 5, then every N (default 35). Chained via `lastUpdatePromise` to avoid out-of-order updates |
 | `deliver` with `info.kind === "tool"` | `channel.sendEvent({ type: "ai_indicator.update", ai_state: "AI_STATE_EXTERNAL_SOURCES" })` | Only emitted once per run (de-duplicated by `indicatorState`) |
 | Dispatcher resolves (run complete) | `client.partialUpdateMessage(msgId, { set: { text, generating: false } })` | Final flush, waits for any in-flight partial updates first |
 | Dispatcher resolves (run complete) | `channel.sendEvent({ type: "ai_indicator.clear" })` | Clears the indicator bubble |
@@ -114,7 +114,7 @@ The `ai_indicator` events are sent via `safeSendEvent`, which retries up to 5 ti
 Each agent run that produces text goes through these steps in `StreamingHandler`:
 
 1. `onRunStarted` — `channel.sendMessage({ text: "", ai_generated: true })` → `ai_indicator.update(AI_STATE_THINKING)`
-2. `onTextChunk` — accumulates text, switches indicator to `AI_STATE_GENERATING` on first chunk, calls `client.partialUpdateMessage({ set: { text, generating: true } })` throttled (early burst: odd chunks < 8; then every Nth chunk, default N=15)
+2. `onTextChunk` — accumulates text, switches indicator to `AI_STATE_GENERATING` on first chunk, calls `client.partialUpdateMessage({ set: { text, generating: true } })` throttled (early burst on chunks 1 and 5; then every Nth chunk, default N=35)
 3. `onRunCompleted` — waits for in-flight partial updates, sends final `partialUpdateMessage({ generating: false })`, sends `ai_indicator.clear`
 
 Force-stop (`ai_indicator.stop` from client) calls `onForceStop`, which clears `generating` without overwriting the accumulated text.
