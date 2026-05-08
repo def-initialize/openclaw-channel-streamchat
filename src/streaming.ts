@@ -3,6 +3,64 @@ import type { ChannelLogSink } from "openclaw/plugin-sdk";
 import type { RunContext } from "./types.js";
 import type { RunContextMap } from "./run-context.js";
 
+type PartialUpdatePayload = Parameters<StreamChat["partialUpdateMessage"]>[1];
+
+function getErrorStatus(err: unknown): number | undefined {
+  return (
+    (err as { status?: number })?.status ??
+    (err as { response?: { status?: number } })?.response?.status
+  );
+}
+
+function getErrorCode(err: unknown): number | string | undefined {
+  return (err as { code?: number | string })?.code;
+}
+
+function isRetryableStreamChatError(err: unknown): boolean {
+  const status = getErrorStatus(err);
+  if (status === 429 || (status != null && status >= 500 && status < 600)) {
+    return true;
+  }
+
+  const code = getErrorCode(err);
+  if (code === 9 || code === "9") {
+    return true;
+  }
+
+  return String(err).includes("Too many requests");
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function partialUpdateMessageWithRetry(
+  client: StreamChat,
+  messageId: string,
+  payload: PartialUpdatePayload,
+  options: {
+    maxAttempts?: number;
+    baseDelayMs?: number;
+  } = {},
+): Promise<void> {
+  const maxAttempts = options.maxAttempts ?? 7;
+  let delayMs = options.baseDelayMs ?? 500;
+
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    try {
+      await client.partialUpdateMessage(messageId, payload);
+      return;
+    } catch (err) {
+      if (!isRetryableStreamChatError(err) || attempt === maxAttempts) {
+        throw err;
+      }
+
+      await sleep(delayMs + Math.floor(Math.random() * 100));
+      delayMs = Math.min(delayMs * 2, 5_000);
+    }
+  }
+}
+
 // ---------------------------------------------------------------------------
 // safeSendEvent — exponential backoff retry for indicator events
 // ---------------------------------------------------------------------------
@@ -19,9 +77,7 @@ async function safeSendEvent(
       await channel.sendEvent(event as unknown as Parameters<typeof channel.sendEvent>[0]);
       return;
     } catch (err: unknown) {
-      const status =
-        (err as { status?: number })?.status ??
-        (err as { response?: { status?: number } })?.response?.status;
+      const status = getErrorStatus(err);
       const retryable = status === 429 || (status != null && status >= 500 && status < 600);
       if (!retryable || attempt === maxAttempts) {
         // Swallow in streaming context to avoid breaking generation flow
@@ -143,7 +199,7 @@ export class StreamingHandler {
     // Switch to GENERATING on first text chunk
     if (stream.indicatorState !== "AI_STATE_GENERATING") {
       stream.indicatorState = "AI_STATE_GENERATING";
-      await safeSendEvent(
+      void safeSendEvent(
         stream.channel,
         {
           type: "ai_indicator.update",
@@ -221,9 +277,13 @@ export class StreamingHandler {
           `[StreamChat][streaming] Empty placeholder delete failed: ${String(err)}`,
         );
         try {
-          await client.partialUpdateMessage(stream.messageId, {
-            set: { text: "", generating: false },
-          });
+          await partialUpdateMessageWithRetry(
+            client,
+            stream.messageId,
+            {
+              set: { text: "", generating: false },
+            },
+          );
         } catch (fallbackErr) {
           log?.error?.(
             `[StreamChat][streaming] Empty placeholder fallback update failed: ${String(fallbackErr)}`,
@@ -243,12 +303,16 @@ export class StreamingHandler {
 
     // Final update with complete text
     try {
-      await client.partialUpdateMessage(stream.messageId, {
-        set: {
-          text: stream.accumulatedText || "(No response)",
-          generating: false,
+      await partialUpdateMessageWithRetry(
+        client,
+        stream.messageId,
+        {
+          set: {
+            text: stream.accumulatedText || "(No response)",
+            generating: false,
+          },
         },
-      });
+      );
     } catch (err) {
       log?.error?.(
         `[StreamChat][streaming] Final update failed: ${String(err)}`,
@@ -283,9 +347,13 @@ export class StreamingHandler {
       : `Error: ${error}`;
 
     try {
-      await client.partialUpdateMessage(stream.messageId, {
-        set: { text: errorText, generating: false },
-      });
+      await partialUpdateMessageWithRetry(
+        client,
+        stream.messageId,
+        {
+          set: { text: errorText, generating: false },
+        },
+      );
     } catch (err) {
       log?.error?.(
         `[StreamChat][streaming] Error update failed: ${String(err)}`,
@@ -322,9 +390,13 @@ export class StreamingHandler {
 
     // Just clear generating flag, don't touch text
     try {
-      await client.partialUpdateMessage(stream.messageId, {
-        set: { generating: false },
-      });
+      await partialUpdateMessageWithRetry(
+        client,
+        stream.messageId,
+        {
+          set: { generating: false },
+        },
+      );
     } catch (err) {
       log?.warn?.(
         `[StreamChat][streaming] Force stop update failed: ${String(err)}`,
